@@ -1,0 +1,25 @@
+{
+  "name": "psycho-supervisor-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for psychological practice supervision",
+  "main": "telegram-bot.js",
+  "scripts": {
+    "start": "node telegram-bot.js",
+    "dev": "nodemon telegram-bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "psychology",
+    "supervision",
+    "training"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.51.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.5.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
