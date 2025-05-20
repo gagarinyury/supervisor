@@ -18,6 +18,7 @@ console.log('Бот успешно запущен...');
 bot.setMyCommands([
   { command: '/start', description: '🏠 Начать работу с ботом' },
   { command: '/new', description: '👤 Новый пациент' },
+  { command: '/custom', description: '🧩 Выбрать пациента' },
   { command: '/analyze', description: '📊 Анализировать сессию' },
   { command: '/info', description: 'ℹ️ Информация о пациенте' },
   { command: '/end', description: '🏁 Завершить сессию' },
@@ -120,7 +121,8 @@ bot.onText(/\/start/, (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: "👤 Создать нового пациента", callback_data: "start_new_patient" }],
+          [{ text: "🎲 Случайный пациент", callback_data: "start_new_patient" }],
+          [{ text: "🧩 Выбрать пациента", callback_data: "start_custom_patient" }],
           [{ text: "❓ Как пользоваться ботом", callback_data: "show_help" }]
         ]
       }
@@ -180,6 +182,36 @@ bot.onText(/\/new/, async (msg) => {
   createRandomPatient(userId);
 });
 
+// Обработчик команды /custom для создания пациента с выбором параметров
+bot.onText(/\/custom/, async (msg) => {
+  const userId = msg.from.id;
+  const userSession = getUserSession(userId);
+  
+  // Проверяем, не в активной ли сессии пользователь
+  if (userSession.state === 'in_dialog' && userSession.currentPatient) {
+    const options = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Да, выбрать пациента", callback_data: "confirm_custom_patient" },
+            { text: "Нет, вернуться", callback_data: "cancel_new_patient" }
+          ]
+        ]
+      }
+    };
+    
+    bot.sendMessage(
+      userId,
+      "⚠️ У вас уже есть активный диалог с пациентом. Вы уверены, что хотите начать новую сессию? Текущий диалог будет потерян.",
+      options
+    );
+    return;
+  }
+  
+  // Показываем меню выбора категории пациента
+  showCategoriesMenu(userId);
+});
+
 // Функция для отображения меню категорий
 function showCategoriesMenu(userId) {
   const categories = Object.entries(patientSystem.casesDB);
@@ -231,6 +263,22 @@ bot.on('callback_query', async (callbackQuery) => {
     saveUserData(userId);
     
     createRandomPatient(userId);
+    return;
+  }
+
+  // Подтверждение создания пациента с выбором параметров
+  if (data === 'confirm_custom_patient') {
+    await bot.answerCallbackQuery(callbackQuery.id);
+    
+    // Сбрасываем сессию и показываем меню выбора категории
+    const userSession = getUserSession(userId);
+    userSession.state = 'idle';
+    userSession.currentPatient = null;
+    userSession.conversation = [];
+    userSession.lastAnalysis = null;
+    saveUserData(userId);
+    
+    showCategoriesMenu(userId);
     return;
   }
   
@@ -341,6 +389,14 @@ bot.on('callback_query', async (callbackQuery) => {
     await bot.answerCallbackQuery(callbackQuery.id);
     // Создаем случайного пациента сразу
     createRandomPatient(userId);
+    return;
+  }
+  
+  // Начать создание пациента с выбором параметров
+  if (data === 'start_custom_patient') {
+    await bot.answerCallbackQuery(callbackQuery.id);
+    // Показываем меню выбора категории пациента
+    showCategoriesMenu(userId);
     return;
   }
   
@@ -639,9 +695,13 @@ bot.on('message', (msg) => {
     }
     
     // Обработка команд главного меню
-    if (msg.text === "👤 Новый пациент") {
+    if (msg.text === "🎲 Случайный пациент") {
       // Вызываем создание нового пациента
       createRandomPatient(userId);
+      return;
+    } else if (msg.text === "🧩 Выбрать пациента") {
+      // Показываем меню выбора категории пациента
+      showCategoriesMenu(userId);
       return;
     } else if (msg.text === "📈 Статистика") {
       // Показываем статистику
@@ -981,7 +1041,10 @@ function endDialog(userId) {
       reply_markup: {
         keyboard: [
           [
-            { text: "👤 Новый пациент" }, 
+            { text: "🎲 Случайный пациент" }, 
+            { text: "🧩 Выбрать пациента" }
+          ],
+          [
             { text: "📈 Статистика" }, 
             { text: "❓ Помощь" }
           ]
@@ -1001,7 +1064,8 @@ function showHelp(userId) {
   const helpText = 
     "🧠 *Как пользоваться ПсихоТренером* 🧠\n\n" +
     "1️⃣ *Создайте пациента*\n" +
-    "   • Используйте команду /new или кнопку\n" +
+    "   • Используйте команду /new для случайного пациента\n" +
+    "   • Используйте команду /custom для выбора категории\n" +
     "   • Каждый пациент уникален и имеет свою историю\n\n" +
     
     "2️⃣ *Проведите сессию*\n" +
@@ -1019,7 +1083,8 @@ function showHelp(userId) {
     "   • Развивайте навыки с разными типами пациентов\n\n" +
     
     "💡 *Доступные команды:*\n" +
-    "/new - Создать нового пациента\n" +
+    "/new - Создать случайного пациента\n" +
+    "/custom - Выбрать пациента\n" +
     "/analyze - Анализировать текущую сессию\n" +
     "/info - Посмотреть карту пациента\n" +
     "/end - Завершить сессию\n" +
@@ -1029,7 +1094,8 @@ function showHelp(userId) {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
-        [{ text: "👤 Создать пациента", callback_data: "start_new_patient" }]
+        [{ text: "🎲 Случайный пациент", callback_data: "start_new_patient" }],
+        [{ text: "🧩 Выбрать пациента", callback_data: "start_custom_patient" }]
       ]
     }
   });
@@ -1106,7 +1172,8 @@ function showUserStats(userId) {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: "👤 Создать нового пациента", callback_data: "start_new_patient" }]
+          [{ text: "🎲 Случайный пациент", callback_data: "start_new_patient" }],
+          [{ text: "🧩 Выбрать пациента", callback_data: "start_custom_patient" }]
         ]
       }
     }
