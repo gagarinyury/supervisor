@@ -1,8 +1,9 @@
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
 const fs = require('fs');
+const CacheManager = require('./cache-manager');
 
-// Инициализация API клиента
+// Инициализация API клиента (теперь через CacheManager)
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
@@ -12,6 +13,12 @@ const anthropic = new Anthropic({
  */
 class PatientSystem {
   constructor() {
+    // Настройки для обнаружения обрезанных ответов
+    this.truncationThreshold = 0.95; // Если использовано более 95% токенов, считаем ответ потенциально обрезанным
+    
+    // 🔥 НОВОЕ: Инициализация системы кеширования
+    this.cacheManager = new CacheManager();
+    console.log('🔥 [PatientSystem] CacheManager инициализирован для экономии токенов');
     // База случаев по категориям
     this.casesDB = {
       anxiety: {
@@ -234,9 +241,9 @@ class PatientSystem {
 
     try {
       const response = await anthropic.messages.create({
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-3-5-haiku-20241022',
         max_tokens: 1000,
-        system: "Ты эксперт в клинической психологии, создающий реалистичные описания пациентов для обучения психологов. Всегда возвращай ответ ТОЛЬКО в формате JSON без дополнительного текста. JSON должен быть валидным и соответствовать запрашиваемым полям.",
+        system: "Ты эксперт в клинической психологии, создающий реалистичные описания пациентов для обучения психологов. ОБЯЗАТЕЛЬНО отвечай ТОЛЬКО на РУССКОМ языке. Всегда возвращай ответ ТОЛЬКО в формате JSON без дополнительного текста. JSON должен быть валидным и соответствовать запрашиваемым полям. ВСЕ значения в JSON должны быть на русском языке.",
         messages: [
           { role: 'user', content: casePrompt }
         ]
@@ -331,6 +338,12 @@ class PatientSystem {
   createPatientPrompt(patientData) {
     return `Ты пациент с ${patientData.meta.diagnosis}. Твой тип отношения к терапии: ${patientData.openness}.
 
+🔥 КРИТИЧЕСКИ ВАЖНО: 
+- Отвечай ИСКЛЮЧИТЕЛЬНО на русском языке
+- ЗАПРЕЩЕНО использовать английские слова, фразы или действия
+- Все действия описывай русскими словами в скобках
+- Пример действий: (смотрит в сторону), (сжимает кулаки), (вздыхает)
+
 При первом ответе психологу:
 1. Представься (${patientData.name}, ${patientData.age} лет, ${patientData.profession})
 2. Кратко опиши одну конкретную ситуацию, связанную с "${patientData.problem}"
@@ -347,7 +360,7 @@ class PatientSystem {
 
 В диалоге:
 - Отвечай КРАТКО (2-4 предложения максимум)
-- Говори обрывочно, с паузами (*показывай действия*)
+- Говори обрывочно, с паузами (показывай действия в скобках русскими словами)
 - Жди реакции психолога, не выдавай всю информацию сразу
 - Используй особенности речи: ${patientData.speech}
 - Проявляй сопротивление: ${patientData.resistance}
@@ -355,6 +368,8 @@ class PatientSystem {
 - Держись своей истории на протяжении диалога
 - НЕ произноси длинных монологов
 - Иногда задавай встречные вопросы психологу
+- СТРОГО на русском языке - никаких английских слов!
+- Действия ТОЛЬКО в скобках: (нервно теребит папку), (опускает глаза), (поправляет очки)
 
 Будь живым человеком, а не образцовым пациентом. Твоя цель - создать реалистичный диалог, а не выдать всю информацию сразу.`;
   }
@@ -365,26 +380,58 @@ class PatientSystem {
    * @param {string} question - Первый вопрос психолога
    * @returns {Promise<object>} - Ответ пациента
    */
+  /**
+   * Проверяет, был ли ответ потенциально обрезан из-за лимита токенов
+   * @param {object} response - Ответ API
+   * @param {number} maxTokens - Максимальное количество токенов
+   * @returns {boolean} - true, если ответ потенциально обрезан
+   */
+  isResponseTruncated(response, maxTokens) {
+    // Если ответ использует более truncationThreshold от лимита, считаем его потенциально обрезанным
+    const usageRatio = response.usage.output_tokens / maxTokens;
+    const isTruncated = usageRatio >= this.truncationThreshold;
+    
+    if (isTruncated) {
+      console.log(`[Обнаружено обрезание] Использовано ${response.usage.output_tokens}/${maxTokens} токенов (${(usageRatio * 100).toFixed(1)}%)`);
+    }
+    
+    return isTruncated;
+  }
+  
   async startPatientDialog(patientData, question = "Здравствуйте! Что привело вас ко мне сегодня?") {
     const patientPrompt = this.createPatientPrompt(patientData);
     
     try {
-      const response = await anthropic.messages.create({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 200, // Ограничиваем длину ответа для большей естественности
-        system: patientPrompt,
+      const maxTokens = 300;
+      
+      // 🔥 НОВОЕ: Используем CacheManager для кеширования промпта пациента
+      const response = await this.cacheManager.createMessage({
+        model: 'claude-3-5-haiku-20241022',
+        maxTokens: maxTokens,
+        system: patientPrompt,  // Этот большой промпт будет закеширован!
         messages: [
           { role: 'user', content: question }
-        ]
+        ],
+        enableCaching: true
       });
       
+      // Логирование использования токенов (теперь с кешированием)
+      console.log(`[Токены: Начало диалога] ${JSON.stringify(response.cacheStats)}`);
+      
+      // Проверяем, не обрезан ли ответ (используем новую структуру ответа)
+      const isTruncated = response.usage.output_tokens >= maxTokens * this.truncationThreshold;
+      
       return {
-        patient_response: response.content[0].text,
+        patient_response: response.content,
         token_usage: {
-          input: response.usage.input_tokens,
-          output: response.usage.output_tokens,
-          total: response.usage.input_tokens + response.usage.output_tokens
-        }
+          input: response.usage.inputTokens,
+          output: response.usage.outputTokens,
+          total: response.usage.totalTokens,
+          cache_creation: response.usage.cacheCreationTokens || 0,
+          cache_read: response.usage.cacheReadTokens || 0
+        },
+        is_truncated: isTruncated,
+        cache_stats: response.cacheStats
       };
     } catch (error) {
       console.error("Ошибка при начале диалога:", error);
@@ -399,8 +446,20 @@ class PatientSystem {
    * @param {string} question - Новый вопрос психолога
    * @returns {Promise<object>} - Ответ пациента
    */
-  async continuePatientDialog(patientData, conversation, question) {
-    const patientPrompt = this.createPatientPrompt(patientData);
+  async continuePatientDialog(patientData, conversation, question, isContinuation = false) {
+    // Выбираем подходящий промпт в зависимости от того, продолжаем ли мы обрезанный ответ
+    let systemPrompt;
+    if (isContinuation) {
+      // Если это продолжение обрезанного ответа, используем упрощенный промпт
+      systemPrompt = `Ты пациент с ${patientData.meta.diagnosis}. 
+Продолжи свой предыдущий ответ с того места, где он был обрезан.
+Не повторяй уже сказанное, просто продолжи мысль естественным образом.
+Говори от первого лица, как пациент. Сохраняй особенности речи и эмоциональное состояние.`;
+    } else {
+      // Обычный полный промпт для нового сообщения
+      systemPrompt = this.createPatientPrompt(patientData);
+    }
+    
     const messages = [];
     
     // Формируем историю разговора для контекста
@@ -409,24 +468,39 @@ class PatientSystem {
       messages.push({ role: 'assistant', content: exchange.patient });
     }
     
-    // Добавляем новый вопрос
-    messages.push({ role: 'user', content: question });
+    // Добавляем новый вопрос, если это не продолжение предыдущего ответа
+    if (!isContinuation) {
+      messages.push({ role: 'user', content: question });
+    }
     
     try {
-      const response = await anthropic.messages.create({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 200, // Ограничиваем длину ответа для большей естественности
-        system: patientPrompt,
-        messages: messages
+      const maxTokens = 300;
+      // 🔥 НОВОЕ: Используем CacheManager для кеширования промпта пациента
+      const response = await this.cacheManager.createMessage({
+        model: 'claude-3-5-haiku-20241022',
+        maxTokens: maxTokens,
+        system: systemPrompt,  // System промпт кешируется
+        messages: messages,
+        enableCaching: true
       });
       
+      // Логирование использования токенов (теперь с кешированием)
+      console.log(`[Токены: ${isContinuation ? 'Продолжение обрезанного ответа' : 'Продолжение диалога'}] ${JSON.stringify(response.cacheStats)}`);
+      
+      // Проверяем, не обрезан ли ответ
+      const isTruncated = response.usage.outputTokens >= maxTokens * this.truncationThreshold;
+      
       return {
-        patient_response: response.content[0].text,
+        patient_response: response.content,
         token_usage: {
-          input: response.usage.input_tokens,
-          output: response.usage.output_tokens,
-          total: response.usage.input_tokens + response.usage.output_tokens
-        }
+          input: response.usage.inputTokens,
+          output: response.usage.outputTokens,
+          total: response.usage.totalTokens,
+          cache_creation: response.usage.cacheCreationTokens || 0,
+          cache_read: response.usage.cacheReadTokens || 0
+        },
+        is_truncated: isTruncated,
+        cache_stats: response.cacheStats
       };
     } catch (error) {
       console.error("Ошибка при продолжении диалога:", error);
@@ -434,6 +508,20 @@ class PatientSystem {
     }
   }
   
+  /**
+   * 📊 Получить статистику кеширования
+   */
+  getCacheStats() {
+    return this.cacheManager.getCacheStats();
+  }
+
+  /**
+   * 📋 Логировать статистику кеширования
+   */
+  logCacheStats() {
+    this.cacheManager.logCacheStats();
+  }
+
   /**
    * Выводит список всех категорий случаев
    */

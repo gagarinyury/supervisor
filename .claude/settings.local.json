@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(chmod:*)",
+      "Bash(./start.sh:*)",
+      "Bash(./pm2-start.sh)",
+      "Bash(pm2 status:*)",
+      "Bash(pm2 stop:*)",
+      "Bash(pm2 restart:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(pm2 list:*)",
+      "Bash(bash:*)",
+      "Bash(pm2 delete:*)",
+      "Bash(mkdir:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(pm2 start:*)",
+      "Bash(pm2 logs:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(node test-caching.js)",
+      "Bash(apt:*)",
+      "Bash(apt install:*)",
+      "Bash(npm install:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(node:*)",
+      "Bash(rm:*)"
+    ],
+    "deny": []
+  }
+}
